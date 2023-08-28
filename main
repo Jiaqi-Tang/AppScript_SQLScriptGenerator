@@ -1,0 +1,160 @@
+//Constants
+const originalSSID = '1zaAom1xzgK5eHDOmOxP9aEj8MOtOlbovu3HGi7sChyg';
+const thisSSID = '1eR_cLr8V_9BSCq72RiNsig1G4A-L76_l79bGEPEleDk'; // Change this
+const timezone = "Etc/UTC";
+
+// The Function
+function getDataFromActaulSheet() {
+
+
+  // Initialize Variables -----------------------------------------------------------------------------------
+  var origianlSS = SpreadsheetApp.openById(originalSSID);
+  var ss = SpreadsheetApp.openById(thisSSID);
+  var dataSource = origianlSS.getSheetByName('Sheet1');
+
+  ss.deleteSheet(ss.getSheetByName("Last"));
+  var lastSheet = ss.getSheetByName("Working"); // Replace "Sheet1" with the actual sheet name
+  lastSheet.setName("Last"); 
+
+  var sheet = ss.insertSheet(); // Create a new sheet
+  sheet.setName("Working");
+  sheet.activate(); // Activate the new sheet
+  ss.moveActiveSheet(1);
+  // -----------------------------------------------------------------------------------------------------------
+
+
+  // Get Data from the Welcome Email Tracker spreadsheet ---------------------------------------------------------
+  var rowNumber = lastSheet.getRange(1, 4).getValue() + 1;
+
+  Logger.log("First Row Number to Include: " + rowNumber);
+  // Copyies information to this sheet
+  var oLastRow = dataSource.getLastRow();
+  Logger.log("Last Row of WET sheet: " + oLastRow);
+
+  if(rowNumber < 2323){
+    throw new Error("Row Value on last sheet is not read properly");
+  }
+  if(oLastRow < rowNumber){
+    lastSheet.setName("Working"); 
+    throw new Error("Something Wrong with Row Count, Original sheet might have no been updated, or have rows deleted");
+  }else  if(oLastRow - rowNumber > 100){
+    throw new Error("To many Row to add, there might be an error. Last row: " + oLastRow);
+  }
+  var lastColumn = dataSource.getLastColumn();
+  var rangeToCopy = dataSource.getRange(rowNumber, 1, oLastRow - rowNumber + 1, lastColumn);
+  var valuesToCopy = rangeToCopy.getValues();
+  var rowCount = valuesToCopy.length;
+  var columnCount = valuesToCopy[0].length;
+  var pasteRange = sheet.getRange(2, 1, rowCount, columnCount);
+  pasteRange.setValues(valuesToCopy);
+  // ----------------------------------------------------------------------------------------------------------------
+
+  // Create SSMS script --------------------------------------------------------------------------------------------
+  var emailsString = "";
+  var gfdIdsString = "";
+
+  var lastRow = sheet.getLastRow();
+  var today = new Date();
+
+  // For every line
+  for (var i = 2; i <= lastRow; i++){
+    var gfdId = sheet.getRange(i, 8).getValue().toString();
+    var email = sheet.getRange(i, 9).getValue().toString();
+    gfdId = gfdId.replace(/^\s*/, "");
+    email = email.replace(/^\s*/, "");
+
+    // GFDID and Email are valid
+    if(/^GFD3V.*/.test(gfdId) && /.+@.+\..+/.test(email)){
+      
+      // Format them to be appended to the script
+      email = "('" + email + "')";
+      gfdId = gfdId.substring(5, gfdId.length);
+
+      // Logger.log(gfdId);
+      gfdId = gfdId.replace(/^0+/, "");
+      gfdId = "(" + gfdId + ")";
+
+      if(emailsString == ""){
+        emailsString = email;
+        gfdIdsString = gfdId;
+      }else{
+        emailsString = emailsString + ", " + email;
+        gfdIdsString = gfdIdsString + ", " + gfdId;
+      }
+
+      // Modifies Original sheet
+      dataSource.getRange(rowNumber + i - 2, 15).setValue(Utilities.formatDate(today, timezone, "yyyy-MM-dd"));
+      dataSource.getRange(rowNumber + i - 2, 16).setValue("Retriggered on " + Utilities.formatDate(today, timezone, "yyyy-MM-dd"));
+      dataSource.getRange(rowNumber + i - 2, 18).setValue("jtang");
+    }else{
+      // Modifies Original Sheet
+      dataSource.getRange(rowNumber + i - 2, 15).setValue(Utilities.formatDate(today, timezone, "yyyy-MM-dd"));
+      dataSource.getRange(rowNumber + i - 2, 16).setValue("Missing GFDID or Email");
+      dataSource.getRange(rowNumber + i - 2, 18).setValue("jtang");
+      dataSource.getRange(rowNumber + i - 2, 1, 1, lastColumn).setBackground('#f4cccc');  
+    }
+  }
+
+  // SSMS script to retrigger Emails
+  var script = `
+DECLARE @GFDIDS TABLE (
+  ID INT IDENTITY(1,1),
+  Element INT
+)
+
+INSERT INTO @GFDIDS (Element)
+VALUES ` + gfdIdsString + `
+
+DECLARE @EMAILS TABLE (
+    ID INT IDENTITY(1,1),
+    Element NVARCHAR(50)
+)
+
+INSERT INTO @EMAILS (Element)
+VALUES ` + emailsString + `
+
+DECLARE @index INT
+DECLARE @maxIndex INT
+DECLARE @counter INT
+DECLARE @element_GFDID INT
+DECLARE @element_EMAIL NVARCHAR(50)
+
+SET @index = 1
+SET @maxIndex = (SELECT MAX(ID) FROM @GFDIDS)
+SET @counter = 1
+
+WHILE (@index <= @maxIndex)
+BEGIN
+    -- Retrieve the elements at the current index
+
+    SET @element_GFDID = (SELECT Element FROM @GFDIDS WHERE ID = @index)
+    SET @element_EMAIL = (SELECT Element FROM @EMAILS WHERE ID = @index)
+    
+    -- Execute retrigger script
+    EXEC    [dbo].[spDonorSendEmail]
+        @intDonorPaymentID = @element_GFDID,
+        @chrEmail = @element_EMAIL,
+        @chrUser = N'jtang' --change to your user
+
+  --PRINT @element_GFDID
+  --PRINT @element_EMAIL
+    
+    -- Incrementing counter
+    SET @counter = @counter + 1
+    SET @index = @index + 1
+END`;
+
+  // Outputs to sheet
+  sheet.getRange(1, 1).setValue(gfdIdsString);
+  sheet.getRange(1, 2).setValue(emailsString);
+  sheet.getRange(1, 3).setValue(script);
+  sheet.getRange(1, 4).setValue(oLastRow);
+  // ----------------------------------------------------------------------------------------------------------------------------
+}
+
+function onOpen(e){
+  SpreadsheetApp.getUi()
+  .createMenu('Generate Sciprt')
+  .addItem('Get Emails', 'getDataFromActaulSheet')
+  .addToUi();
+}
